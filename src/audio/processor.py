@@ -26,6 +26,12 @@ class AudioProcessor:
         # Initialize components
         self.transcriber = WhisperTranscriber(whisper_model, device)
         self.diarizer = SpeakerDiarizer(auth_token, device)
+        
+        # Load any existing speaker profiles
+        profiles_path = Path("data/speaker_profiles.pkl")
+        if profiles_path.exists():
+            self.diarizer.load_speaker_profiles(profiles_path)
+            self.logger.info("Loaded existing speaker profiles")
 
     def process_audio(
         self,
