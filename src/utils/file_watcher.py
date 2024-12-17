@@ -1,29 +1,44 @@
 # src/utils/file_watcher.py
 from pathlib import Path
-from typing import Set
 from typing import Set, Union
 import time
 import logging
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
 
-class AudioFileWatcher:
-    def __init__(self, watch_dir: Union[str, Path]):
-        self.watch_dir = Path(watch_dir)
+class AudioFileHandler(FileSystemEventHandler):
+    def __init__(self, processor, output_dir: Path):
+        self.processor = processor
+        self.output_dir = output_dir
         self.logger = logging.getLogger(__name__)
         self.processed_files: Set[Path] = set()
         
-        if not self.watch_dir.exists():
-            self.watch_dir.mkdir(parents=True)
-            self.logger.info(f"Created watch directory: {self.watch_dir}")
-    
-    def get_new_files(self) -> Set[Path]:
-        """Get new audio files that haven't been processed yet."""
-        current_files = set(
-            p for p in self.watch_dir.glob("**/*")
-            if p.is_file() and p.suffix.lower() in {".mp3", ".wav", ".m4a", ".flac"}
-        )
-        new_files = current_files - self.processed_files
-        return new_files
-    
-    def mark_as_processed(self, file_path: Path):
-        """Mark a file as processed."""
-        self.processed_files.add(file_path)
+    def process_file(self, file_path: Path):
+        try:
+            # Process the audio file
+            result = self.processor.process_audio(file_path, language="en")
+            
+            # Create output filename
+            transcript_path = self.output_dir / f"{file_path.stem}_transcript.txt"
+            
+            # Save formatted transcript
+            with open(transcript_path, "w", encoding="utf-8") as f:
+                f.write(result["formatted_transcript"])
+                
+            self.logger.info(f"Processed and saved transcript: {transcript_path}")
+            self.processed_files.add(file_path)
+            
+            return result
+            
+        except Exception as e:
+            self.logger.error(f"Failed to process {file_path}: {str(e)}")
+            return None
+
+    def on_created(self, event):
+        if event.is_directory:
+            return
+            
+        file_path = Path(event.src_path)
+        if file_path.suffix.lower() in {'.mp3', '.wav', '.m4a', '.flac'}:
+            self.logger.info(f"New audio file detected: {file_path}")
+            self.process_file(file_path)
