@@ -11,7 +11,6 @@ import soundfile as sf
 from .speaker_identity import SpeakerIdentifier
 from pydub import AudioSegment
 import tempfile
-import os
 
 # Set environment Variable to disable symLinks
 os.environ["HF_HUB_DISABLE_SYMLINKS"] = "1"
@@ -92,7 +91,7 @@ class SpeakerDiarizer:
         """Perform speaker diarization on an audio file."""
         try:
             self.logger.info(f"Starting diarization for: {audio_path}")
-
+        
             # Convert to WAV if needed
             if audio_path.suffix.lower() != '.wav':
                 self.logger.info("Converting audio to WAV format...")
@@ -100,13 +99,13 @@ class SpeakerDiarizer:
                 self.logger.info(f"Audio converted: {wav_path}")
             else:
                 wav_path = audio_path
-
+        
             # Run diarization
             diarization = self.pipeline(str(wav_path))
-
+        
             # Load audio for speaker identification
             audio, sample_rate = sf.read(str(wav_path))
-
+        
             # Convert results to speaker segments
             segments = []
             for turn, _, speaker in diarization.itertracks(yield_label=True):
@@ -114,23 +113,23 @@ class SpeakerDiarizer:
                 start_sample = int(turn.start * sample_rate)
                 end_sample = int(turn.end * sample_rate)
                 segment_audio = audio[start_sample:end_sample]
-
-                # Default speaker label
-                speaker_label = f"SPEAKER_{speaker.split('#')[-1]}"
-                confidence = 0.0
-
+            
                 # Try to identify the speaker
+                identified_name = None
+                confidence = 0.0
+            
                 if hasattr(self, 'speaker_identifier'):
                     try:
-                        identified_speaker, conf = self.speaker_identifier.identify_speaker(
-                            segment_audio)
-                        if identified_speaker:
-                            speaker_label = identified_speaker
-                            confidence = conf
+                        identified_name, confidence = self.speaker_identifier.identify_speaker(
+                            segment_audio, sample_rate)
+                        if identified_name:
+                            self.logger.info(f"Identified speaker {identified_name} with confidence {confidence:.2%}")
                     except Exception as e:
-                        self.logger.warning(
-                            f"Speaker identification failed for segment: {e}")
+                        self.logger.warning(f"Speaker identification failed for segment: {e}")
 
+                # Use identified name or default speaker label
+                speaker_label = identified_name if identified_name else f"SPEAKER_{speaker.split('#')[-1]}"
+            
                 segment = SpeakerSegment(
                     speaker=speaker_label,
                     start=turn.start,
@@ -138,22 +137,44 @@ class SpeakerDiarizer:
                     confidence=confidence
                 )
                 segments.append(segment)
-
+        
             # Clean up temporary file
             if audio_path.suffix.lower() != '.wav':
                 try:
                     wav_path.unlink()
                 except:
                     pass
-
-            self.logger.info(
-                f"Diarization completed. Found {len(set(s.speaker for s in segments))} speakers")
+        
+            # Log statistics
+            num_speakers = len(set(s.speaker for s in segments))
+            identified_segments = [s for s in segments if not s.speaker.startswith("SPEAKER_")]
+        
+            self.logger.info(f"Diarization completed. Found {num_speakers} speakers")
+            if identified_segments:
+                avg_confidence = sum(s.confidence for s in identified_segments) / len(identified_segments)
+                self.logger.info(f"Successfully identified {len(identified_segments)} segments "f"with average confidence {avg_confidence:.2%}")
+        
             return segments
-
+        
         except Exception as e:
             self.logger.error(f"Diarization failed for {audio_path}: {str(e)}")
             raise
 
+    def identify_speaker(self, audio_segment: np.ndarray) -> tuple[Optional[str], float]:
+        """Identify a speaker from an audio segment."""
+        if not hasattr(self, 'speaker_identifier') or not self.speaker_identifier.speakers:
+            self.logger.debug("No speaker profiles loaded")
+            return None, 0.0
+        
+        try:
+            identified_name, confidence = self.speaker_identifier.identify_speaker(segment_audio)
+            if identified_name:
+                self.logger.debug(f"Identified speaker: {identified_name} (confidence: {confidence:.2%})")
+            return identified_name, confidence
+        except Exception as e:
+            self.logger.warning(f"Speaker identification failed: {str(e)}")
+            return None, 0.0    
+        
     def assign_transcription_to_segments(
         self,
         segments: List[SpeakerSegment],
